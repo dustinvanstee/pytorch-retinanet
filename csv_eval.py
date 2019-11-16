@@ -62,7 +62,8 @@ def _compute_ap(recall, precision):
     return ap
 
 
-def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100, save_path=None):
+def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100, save_path=None,
+                    num_images=5000):
     """ Get the detections from the retinanet using the generator.
     The result is a list of lists such that the size is:
         all_detections[num_images][num_classes] = detections[num_detections, 4 + num_classes]
@@ -78,10 +79,12 @@ def _get_detections(dataset, retinanet, score_threshold=0.05, max_detections=100
     all_detections = [[None for i in range(dataset.num_classes())] for j in range(len(dataset))]
 
     retinanet.eval()
-    
+    if(len(dataset) < num_images) :
+        num_images = len(dataset)
+
     with torch.no_grad():
 
-        for index in range(len(dataset)):
+        for index in range(num_images):
             data = dataset[index]
             scale = data['scale']
 
@@ -152,7 +155,8 @@ def evaluate(
     iou_threshold=0.5,
     score_threshold=0.05,
     max_detections=100,
-    save_path=None
+    save_path=None,
+    num_images=5000
 ):
     """ Evaluate a given dataset using a given retinanet.
     # Arguments
@@ -162,15 +166,19 @@ def evaluate(
         score_threshold : The score confidence threshold to use for detections.
         max_detections  : The maximum number of detections to use per image.
         save_path       : The path to save images with visualized detections to.
+        num_images      : Limit the number of images for debug.  If len(generator) < num_images,
+        then just use len(generator)
     # Returns
         A dict mapping class names to mAP scores.
     """
-
-
+    if(len(generator) < num_images) :
+        num_images = len(generator)
 
     # gather all detections and annotations
 
-    all_detections     = _get_detections(generator, retinanet, score_threshold=score_threshold, max_detections=max_detections, save_path=save_path)
+    all_detections     = _get_detections(generator, retinanet, score_threshold=score_threshold,
+                                         max_detections=max_detections, save_path=save_path,
+                                         num_images=num_images)
     all_annotations    = _get_annotations(generator)
 
     average_precisions = {}
@@ -181,7 +189,7 @@ def evaluate(
         scores          = np.zeros((0,))
         num_annotations = 0.0
 
-        for i in range(len(generator)):
+        for i in range(num_images):
             detections           = all_detections[i][label]
             annotations          = all_annotations[i][label]
             num_annotations     += annotations.shape[0]

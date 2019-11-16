@@ -9,17 +9,19 @@ import os
 
 import torch
 
-def evaluate_coco(dataset, model, threshold=0.05):
+def evaluate_coco(dataset, model, threshold=0.05, num_images=5000):
     
     model.eval()
-    
+    if(len(dataset) < num_images) :
+        num_images = len(dataset)
+
     with torch.no_grad():
 
         # start collecting results
         results = []
         image_ids = []
 
-        for index in range(len(dataset)):
+        for index in range(num_images):
             data = dataset[index]
             scale = data['scale']
 
@@ -65,8 +67,8 @@ def evaluate_coco(dataset, model, threshold=0.05):
             # print progress
             print('{}/{}'.format(index, len(dataset)), end='\r')
 
-        if not len(results):
-            return
+        #if not len(results):
+        #    return
 
         # write output
         json.dump(results, open('{}_bbox_results.json'.format(dataset.set_name), 'w'), indent=4)

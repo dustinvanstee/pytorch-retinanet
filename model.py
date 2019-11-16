@@ -12,6 +12,7 @@ from lib.nms.gpu_nms import gpu_nms
 def nms(dets, thresh):
     "Dispatch to either CPU or GPU NMS implementations.\
     Accept dets as tensor"""
+    dets = dets.cpu().detach().numpy()
     return gpu_nms(dets, thresh)
 
 model_urls = {
