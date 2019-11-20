@@ -7,7 +7,7 @@ from utils import BasicBlock, Bottleneck, BBoxTransform, ClipBoxes
 from anchors import Anchors
 import losses
 #from lib.nms.pth_nms import pth_nms
-from lib.nms.gpu_nms import gpu_nms
+from lib.NMS.nms.gpu_nms import gpu_nms
 
 def nms(dets, thresh):
     "Dispatch to either CPU or GPU NMS implementations.\
@@ -239,7 +239,7 @@ class ResNet(nn.Module):
             img_batch, annotations = inputs
         else:
             img_batch = inputs
-            
+        #print("model image_batch size = {}".format(img_batch.size()))
         x = self.conv1(img_batch)
         x = self.bn1(x)
         x = self.relu(x)
