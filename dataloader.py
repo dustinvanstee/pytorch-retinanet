@@ -10,6 +10,8 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms, utils
 from torch.utils.data.sampler import Sampler
 
+import torch.nn.functional as F
+from torch.autograd import Variable
 from pycocotools.coco import COCO
 
 import skimage.io
@@ -203,9 +205,9 @@ class CSVDataset(Dataset):
 
     def __getitem__(self, idx):
 
-        img = self.load_image(idx)
+        (path, img) = self.load_image(idx)
         annot = self.load_annotations(idx)
-        sample = {'img': img, 'annot': annot}
+        sample = {'path' : path, 'img': img, 'annot': annot}
         if self.transform:
             sample = self.transform(sample)
 
@@ -217,7 +219,7 @@ class CSVDataset(Dataset):
         if len(img.shape) == 2:
             img = skimage.color.gray2rgb(img)
 
-        return img.astype(np.float32)/255.0
+        return (self.image_names[image_index], img.astype(np.float32)/255.0)
 
     def load_annotations(self, image_index):
         # get ground truth annotations
@@ -305,7 +307,8 @@ def collater(data):
     imgs = [s['img'] for s in data]
     annots = [s['annot'] for s in data]
     scales = [s['scale'] for s in data]
-        
+    paths =  [s['path'] for s in data]
+
     widths = [int(s.shape[0]) for s in imgs]
     heights = [int(s.shape[1]) for s in imgs]
     batch_size = len(imgs)
@@ -336,41 +339,63 @@ def collater(data):
 
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
 
-    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales}
+    return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'path': paths}
+
+
+def resize2d(img, size):
+    return (F.adaptive_avg_pool2d(Variable(img,volatile=True), size)).data
 
 class Resizer(object):
     """Convert ndarrays in sample to Tensors."""
+    def __init__(self, min_side=608, max_side=1024) :
+        self.min_side = min_side
+        self.max_side = max_side
 
-    def __call__(self, sample, min_side=608, max_side=1024):
-        image, annots = sample['img'], sample['annot']
 
+    def __call__(self, sample ):
+        '''
+        Expect image to be of format HWC
+        '''
+        image, annots, paths = sample['img'], sample['annot'], sample['path']
         rows, cols, cns = image.shape
 
         smallest_side = min(rows, cols)
 
         # rescale the image so the smallest side is min_side
-        scale = min_side / smallest_side
+        scale = self.min_side / smallest_side
 
         # check if the largest side is now greater than max_side, which can happen
         # when images have a large aspect ratio
         largest_side = max(rows, cols)
 
-        if largest_side * scale > max_side:
-            scale = max_side / largest_side
+        if largest_side * scale > self.max_side:
+            scale = self.max_side / largest_side
 
         # resize the image with the computed scale
-        image = skimage.transform.resize(image, (int(round(rows*scale)), int(round((cols*scale)))))
+        #imaget(image, (int(round(rows*scale)), int(round((cols*scale)))))
+
+        rows = int(round(rows*scale))
+        cols = int(round(cols*scale))
+        rows += (32-rows%32) # row pad to 32
+        cols += (32-cols%32) # col pad to 32
+        print("Image resize to {} {} from {} ".format(rows, cols, image.size()))
+        image = resize2d(image.permute(2,0,1), (rows,cols))
+        print(image.size())
+        image = image.permute(1,2,0)
+        print(image.size())
+        
         rows, cols, cns = image.shape
 
-        pad_w = 32 - rows%32
-        pad_h = 32 - cols%32
+        # pad_w = 32 - rows%32
+        #pad_h = 32 - cols%32
 
-        new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
-        new_image[:rows, :cols, :] = image.astype(np.float32)
+        #new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
+        #new_image[:rows, :cols, :] = image.astype(np.float32)
         #print("resized shape = {}".format(new_image.shape))
         annots[:, :4] *= scale
 
-        return {'img': torch.from_numpy(new_image), 'annot': torch.from_numpy(annots), 'scale': scale}
+        return {'img': image, 'annot': annots, 'scale':
+                scale, 'path':paths}
 
 
 class Augmenter(object):
@@ -403,11 +428,17 @@ class Normalizer(object):
         self.mean = np.array([[[0.485, 0.456, 0.406]]])
         self.std = np.array([[[0.229, 0.224, 0.225]]])
 
+        self.mean = torch.from_numpy(self.mean).type(torch.FloatTensor)
+        self.std  = torch.from_numpy(self.std).type(torch.FloatTensor)
+        print(self.mean.dtype)
+
+
     def __call__(self, sample):
 
-        image, annots = sample['img'], sample['annot']
+        image, annots, paths = sample['img'], sample['annot'], sample['path']
 
-        return {'img':((image.astype(np.float32)-self.mean)/self.std), 'annot': annots}
+        return {'img':((image-self.mean)/self.std), 'annot': annots, 'path' :
+                paths, 'scale' :1.0}
 
 class UnNormalizer(object):
     def __init__(self, mean=None, std=None):
@@ -430,6 +461,25 @@ class UnNormalizer(object):
         for t, m, s in zip(tensor, self.mean, self.std):
             t.mul_(s).add_(m)
         return tensor
+
+
+class ToTensor(object) :
+    '''
+    First Transformation required to get everything to tensors first.. then aplly transformations .
+    This way I can stack and  unstack transformations....
+    '''
+    def __init__(self):
+        a=0
+    def __call__(self,sample) :
+
+        image, annots, paths = sample['img'], sample['annot'], sample['path']
+        image = image.astype(np.float32)
+        image = torch.from_numpy(image)
+        annots = torch.from_numpy(annots)
+        
+        return {'img': image, 'annot': annots, 'path' :
+                paths, 'scale' : 1.0}
+
 
 
 class AspectRatioBasedSampler(Sampler):
