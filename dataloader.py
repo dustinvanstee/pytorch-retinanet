@@ -22,6 +22,10 @@ import skimage
 from PIL import Image
 
 
+def nprint(mystring) :
+    print("**{}** : {}".format(sys._getframe(1).f_code.co_name,mystring))
+
+
 class CocoDataset(Dataset):
     """Coco dataset."""
 
@@ -337,6 +341,7 @@ def collater(data):
         annot_padded = torch.ones((len(annots), 1, 5)) * -1
 
 
+
     padded_imgs = padded_imgs.permute(0, 3, 1, 2)
 
     return {'img': padded_imgs, 'annot': annot_padded, 'scale': scales, 'path': paths}
@@ -356,6 +361,10 @@ class Resizer(object):
         '''
         Expect image to be of format HWC
         '''
+        if "path" not in sample.keys() :
+            a=1
+            nprint("Error annots = {}".format(sample['annot']))
+        
         image, annots, paths = sample['img'], sample['annot'], sample['path']
         rows, cols, cns = image.shape
 
@@ -378,24 +387,17 @@ class Resizer(object):
         cols = int(round(cols*scale))
         rows += (32-rows%32) # row pad to 32
         cols += (32-cols%32) # col pad to 32
-        print("Image resize to {} {} from {} ".format(rows, cols, image.size()))
+        #print("Image resize to {} {} from {} ".format(rows, cols, image.size()))
         image = resize2d(image.permute(2,0,1), (rows,cols))
-        print(image.size())
+        #print(image.size())
         image = image.permute(1,2,0)
-        print(image.size())
+        #print(image.size())
         
         rows, cols, cns = image.shape
 
-        # pad_w = 32 - rows%32
-        #pad_h = 32 - cols%32
-
-        #new_image = np.zeros((rows + pad_w, cols + pad_h, cns)).astype(np.float32)
-        #new_image[:rows, :cols, :] = image.astype(np.float32)
-        #print("resized shape = {}".format(new_image.shape))
         annots[:, :4] *= scale
-
-        return {'img': image, 'annot': annots, 'scale':
-                scale, 'path':paths}
+        
+        return {'img': image, 'annot': annots, 'scale': scale, 'path':paths}
 
 
 class Augmenter(object):
@@ -404,20 +406,24 @@ class Augmenter(object):
     def __call__(self, sample, flip_x=0.5):
 
         if np.random.rand() < flip_x:
-            image, annots = sample['img'], sample['annot']
-            image = image[:, ::-1, :]
-
-            rows, cols, channels = image.shape
-
-            x1 = annots[:, 0].copy()
-            x2 = annots[:, 2].copy()
+            image, annots, paths = sample['img'], sample['annot'], sample['path']
+            #Create inverted indices
+            idx = [i for i in range(image.size(1)-1, -1, -1)]
+            idx = torch.LongTensor(idx)
+            inverted_image = image.index_select(1, idx)
+            rows, cols, channels = inverted_image.shape
             
-            x_tmp = x1.copy()
+            x1 = annots[:, 0].clone()
+            x2 = annots[:, 2].clone()
+            
+            x_tmp = x1.clone()
+            tcols = torch.tensor(cols,dtype=torch.double)
 
-            annots[:, 0] = cols - x2
-            annots[:, 2] = cols - x_tmp
+            annots[:, 0] = tcols - x2
+            annots[:, 2] = tcols - x_tmp
 
-            sample = {'img': image, 'annot': annots}
+            #nprint("Annots after = {}".format(annots))
+            sample = {'img': inverted_image, 'annot': annots, 'path' : paths}
 
         return sample
 
@@ -430,15 +436,12 @@ class Normalizer(object):
 
         self.mean = torch.from_numpy(self.mean).type(torch.FloatTensor)
         self.std  = torch.from_numpy(self.std).type(torch.FloatTensor)
-        print(self.mean.dtype)
-
 
     def __call__(self, sample):
 
         image, annots, paths = sample['img'], sample['annot'], sample['path']
-
-        return {'img':((image-self.mean)/self.std), 'annot': annots, 'path' :
-                paths, 'scale' :1.0}
+        
+        return {'img':((image-self.mean)/self.std), 'annot': annots, 'path' : paths, 'scale' :1.0}
 
 class UnNormalizer(object):
     def __init__(self, mean=None, std=None):
@@ -458,9 +461,10 @@ class UnNormalizer(object):
         Returns:
             Tensor: Normalized image.
         """
-        for t, m, s in zip(tensor, self.mean, self.std):
+        new_tensor = tensor.clone()
+        for t, m, s in zip(new_tensor, self.mean, self.std):
             t.mul_(s).add_(m)
-        return tensor
+        return new_tensor
 
 
 class ToTensor(object) :
@@ -477,8 +481,7 @@ class ToTensor(object) :
         image = torch.from_numpy(image)
         annots = torch.from_numpy(annots)
         
-        return {'img': image, 'annot': annots, 'path' :
-                paths, 'scale' : 1.0}
+        return {'img': image, 'annot': annots, 'path' : paths, 'scale' : 1.0}
 
 
 
